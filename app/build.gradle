@@ -31,8 +31,8 @@ android {
         versionCode 80
         versionName "3.4.1"
         multiDexEnabled true
-        // buildConfigField "String", "GIT_HASH", "\"${getGitHash()}\""
-        // buildConfigField "String", "GIT_BRANCH", "\"${getGitBranch()}\""
+        buildConfigField "String", "GIT_HASH", "XXXX"
+        buildConfigField "String", "GIT_BRANCH", "Main"
         buildConfigField "java.util.concurrent.atomic.AtomicBoolean", "TEST", "new java.util.concurrent.atomic.AtomicBoolean(false)"
 
         ndk {
