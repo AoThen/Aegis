@@ -17,12 +17,14 @@ import android.provider.Settings;
 import android.text.Spannable;
 import android.text.SpannableStringBuilder;
 import android.text.style.StyleSpan;
+import android.util.Log;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.AutoCompleteTextView;
 import android.widget.Button;
@@ -46,6 +48,7 @@ import com.beemdevelopment.aegis.R;
 import com.beemdevelopment.aegis.SortCategory;
 import com.beemdevelopment.aegis.helpers.BitmapHelper;
 import com.beemdevelopment.aegis.helpers.DropdownHelper;
+import com.beemdevelopment.aegis.helpers.FabMenuHelper;
 import com.beemdevelopment.aegis.helpers.FabScrollHelper;
 import com.beemdevelopment.aegis.helpers.PermissionHelper;
 import com.beemdevelopment.aegis.helpers.ViewHelper;
@@ -61,6 +64,7 @@ import com.beemdevelopment.aegis.ui.models.VaultGroupModel;
 import com.beemdevelopment.aegis.ui.tasks.IconOptimizationTask;
 import com.beemdevelopment.aegis.ui.tasks.QrDecodeTask;
 import com.beemdevelopment.aegis.ui.views.EntryListView;
+import com.beemdevelopment.aegis.util.ClipboardUtils;
 import com.beemdevelopment.aegis.util.TimeUtils;
 import com.beemdevelopment.aegis.util.UUIDMap;
 import com.beemdevelopment.aegis.vault.VaultEntry;
@@ -69,7 +73,6 @@ import com.beemdevelopment.aegis.vault.VaultFile;
 import com.beemdevelopment.aegis.vault.VaultGroup;
 import com.beemdevelopment.aegis.vault.VaultRepository;
 import com.beemdevelopment.aegis.vault.VaultRepositoryException;
-import com.google.android.material.bottomsheet.BottomSheetDialog;
 import com.google.android.material.chip.Chip;
 import com.google.android.material.chip.ChipGroup;
 import com.google.android.material.color.MaterialColors;
@@ -84,6 +87,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -117,6 +121,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
     private Set<UUID> _prefGroupFilter;
 
     private FabScrollHelper _fabScrollHelper;
+    private FabMenuHelper _fabMenuHelper;
 
     private ActionMode _actionMode;
     private ActionMode.Callback _actionModeCallbacks = new ActionModeCallbacks();
@@ -124,6 +129,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
     private LockBackPressHandler _lockBackPressHandler;
     private SearchViewBackPressHandler _searchViewBackPressHandler;
     private ActionModeBackPressHandler _actionModeBackPressHandler;
+    private FabMenuBackPressHandler _fabMenuBackPressHandler;
 
     private final ActivityResultLauncher<Intent> authResultLauncher =
             registerForActivityResult(new StartActivityForResult(), activityResult -> {
@@ -207,6 +213,8 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
         getOnBackPressedDispatcher().addCallback(this, _searchViewBackPressHandler);
         _actionModeBackPressHandler = new ActionModeBackPressHandler();
         getOnBackPressedDispatcher().addCallback(this, _actionModeBackPressHandler);
+        _fabMenuBackPressHandler = new FabMenuBackPressHandler();
+        getOnBackPressedDispatcher().addCallback(this, _fabMenuBackPressHandler);
 
         _entryListView = (EntryListView) getSupportFragmentManager().findFragmentById(R.id.key_profiles);
         _entryListView.setListener(this);
@@ -226,27 +234,29 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
         _entryListView.setSearchBehaviorMask(_prefs.getSearchBehaviorMask());
         _prefGroupFilter = _prefs.getGroupFilter();
 
-         FloatingActionButton fab = findViewById(R.id.fab);
-         fab.setOnClickListener(v -> {
-             View view = getLayoutInflater().inflate(R.layout.dialog_add_entry, null);
-             BottomSheetDialog dialog = new BottomSheetDialog(this);
-             dialog.setContentView(view);
+         View scrimOverlayLayout = LayoutInflater.from(this).inflate(R.layout.scrim_layout, null);
+         View scrimOverlay = scrimOverlayLayout.findViewById(R.id.scrim);
+         addContentView(scrimOverlayLayout, new ViewGroup.LayoutParams(
+             ViewGroup.LayoutParams.MATCH_PARENT,
+             ViewGroup.LayoutParams.MATCH_PARENT
+         ));
 
-             view.findViewById(R.id.fab_enter).setOnClickListener(v1 -> {
-                 dialog.dismiss();
-                 startEditEntryActivityForManual();
-             });
-             view.findViewById(R.id.fab_scan_image).setOnClickListener(v2 -> {
-                 dialog.dismiss();
-                 startScanImageActivity();
-             });
-             view.findViewById(R.id.fab_scan).setOnClickListener(v3 -> {
-                 dialog.dismiss();
-                 startScanActivity();
-             });
+         View fabMenuLayout = LayoutInflater.from(this).inflate(R.layout.fab_menu, null);
+         addContentView(fabMenuLayout, new ViewGroup.LayoutParams(
+             ViewGroup.LayoutParams.MATCH_PARENT,
+             ViewGroup.LayoutParams.MATCH_PARENT
+         ));
 
-             Dialogs.showSecureDialog(dialog);
-         });
+        ViewGroup menuItemsContainer = fabMenuLayout.findViewById(R.id.fab_menu_items_container);
+        FloatingActionButton fab = fabMenuLayout.findViewById(R.id.fab);
+
+        LinkedHashMap<View, Runnable> actions = new LinkedHashMap<>();
+        actions.put(fabMenuLayout.findViewById(R.id.fab_menu_item_scan), this::startScanActivity);
+        actions.put(fabMenuLayout.findViewById(R.id.fab_menu_item_scan_image), this::startScanImageActivity);
+        actions.put(fabMenuLayout.findViewById(R.id.fab_menu_item_enter), this::startEditEntryActivity);
+
+        _fabMenuHelper = new FabMenuHelper(scrimOverlay, menuItemsContainer, fab, actions);
+        _fabMenuHelper.setOnFabMenuStateChangeListener(_fabMenuBackPressHandler::setEnabled);
 
         _groupChip = findViewById(R.id.groupChipGroup);
         _fabScrollHelper = new FabScrollHelper(fab);
@@ -459,6 +469,34 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
         if (_loaded) {
             recreate();
         }
+    }
+
+    private void startEditEntryActivity() {
+        String clip = ClipboardUtils.readText(this);
+        if (clip != null) {
+            GoogleAuthInfo parsed;
+            try {
+                parsed = GoogleAuthInfo.parseUri(clip.trim());
+                String message = getString(
+                        R.string.import_from_clipboard_message,
+                        parsed.getAccountName(),
+                        parsed.getIssuer()
+                );
+
+                Dialogs.showSecureDialog(new MaterialAlertDialogBuilder(this)
+                        .setTitle(R.string.import_from_clipboard_title)
+                        .setMessage(message)
+                        .setPositiveButton(R.string.yes, (dialog, which) -> startEditEntryActivityForNew(new VaultEntry(parsed)))
+                        .setNegativeButton(R.string.no,  (dialog, which) -> startEditEntryActivityForManual())
+                        .create());
+
+                return;
+            } catch (GoogleAuthInfoException e) {
+                Log.i("EntryActivity", "Clipboard did not contain a valid otpauth URI", e);
+            }
+        }
+
+        startEditEntryActivityForManual();
     }
 
     private void startEditEntryActivityForNew(VaultEntry entry) {
@@ -1314,6 +1352,9 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
         if (_searchView != null && !_searchView.isIconified()) {
             collapseSearchView();
         }
+        if (_fabMenuHelper != null && _fabMenuHelper.isOpen()) {
+            _fabMenuHelper.close();
+        }
 
         _entryListView.clearEntries();
         _loaded = false;
@@ -1395,6 +1436,19 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
         public void handleOnBackPressed() {
             if (_actionMode != null) {
                 _actionMode.finish();
+            }
+        }
+    }
+
+    private class FabMenuBackPressHandler extends OnBackPressedCallback {
+        public FabMenuBackPressHandler() {
+            super(false);
+        }
+
+        @Override
+        public void handleOnBackPressed() {
+            if (_fabMenuHelper != null && _fabMenuHelper.isOpen()) {
+                _fabMenuHelper.close();
             }
         }
     }
